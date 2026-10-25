@@ -2483,6 +2483,14 @@ static int start_dnssd(std::vector<char> hw_addr, std::string name) {
 
     /* bit 27 of Features determines whether the AirPlay2 client-pairing protocol will be used (1) or not (0) */
     dnssd_set_airplay_features(dnssd, 27, (int) setup_legacy_pairing);
+
+    /* [airmirror] 实测 mini(macOS 27.0.1) 对安卓 AirMirror 类接收端能满帧推流，
+     * 其广播身份为 features=0x4a7fdfd5,0x400（bit42=Screen Multi Codec）。
+     * 对 UxPlay 默认身份(0x527FFEE6,0x0)则 sender 的 pacing sink 100% 丢帧。
+     * 此处直接覆盖逐位计算结果，保证 mDNS TXT 与 /info 两处一致。
+     * 注意：广播 bit42 后客户端可能选 h265，必须配合 -h265 启动！ */
+    dnssd->features1 = 0x4a7fdfd5;
+    dnssd->features2 = 0x400;
     return 0;
 }
 

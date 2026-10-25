@@ -160,7 +160,7 @@ static int dnssd_build_airplay_txt(dnssd_t *dnssd_public)
     return mdnsd_txt_add(&dnssd->airplay_record, "deviceid", device_id) ||
            mdnsd_txt_add(&dnssd->airplay_record, "features", features) ||
            mdnsd_txt_add(&dnssd->airplay_record, "pw", dnssd_public->pin_pw ? "true" : "false") ||
-           mdnsd_txt_add(&dnssd->airplay_record, "flags", "0x4") ||
+           mdnsd_txt_add(&dnssd->airplay_record, "flags", "0x44") ||
            mdnsd_txt_add(&dnssd->airplay_record, "model", GLOBAL_MODEL) ||
            mdnsd_txt_add(&dnssd->airplay_record, "pk", dnssd_public->pk) ||
            mdnsd_txt_add(&dnssd->airplay_record, "pi", AIRPLAY_PI) ||

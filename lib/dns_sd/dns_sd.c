@@ -356,16 +356,16 @@ dnssd_register_airplay(dnssd_t *dnssd_public, unsigned short port)
     switch (dnssd_public->pin_pw) {
     case 1:   // display onscreen pin
         dnssd->TXTRecordSetValue(&dnssd->airplay_record, "pw", strlen("true"), "true");
-        dnssd->TXTRecordSetValue(&dnssd->airplay_record, "flags", 3, "0x4");
-        break;  
+        dnssd->TXTRecordSetValue(&dnssd->airplay_record, "flags", 4, "0x44");
+        break;
     case 2:  // require password
     case 3:
         dnssd->TXTRecordSetValue(&dnssd->airplay_record, "pw", strlen("true"), "true");
-        dnssd->TXTRecordSetValue(&dnssd->airplay_record, "flags", 3, "0x4");
+        dnssd->TXTRecordSetValue(&dnssd->airplay_record, "flags", 4, "0x44");
         break;
     default:
         dnssd->TXTRecordSetValue(&dnssd->airplay_record, "pw", strlen("false"), "false");
-        dnssd->TXTRecordSetValue(&dnssd->airplay_record, "flags", 3, "0x4");
+        dnssd->TXTRecordSetValue(&dnssd->airplay_record, "flags", 4, "0x44");
         break;
     }
     dnssd->TXTRecordSetValue(&dnssd->airplay_record, "model", strlen(GLOBAL_MODEL), GLOBAL_MODEL);
