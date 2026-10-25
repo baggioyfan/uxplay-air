@@ -30,8 +30,10 @@ REQUIRED_ELEMENTS = [
     # 不存在的那个会被自动记为 unresolved。漏了 applemedia 就会掉回软解，i5 上必卡。
     "vtdec", "vtdec_h264", "vtdec_h265", "avdec_h264",
     "videoflip", "videoconvert", "videoscale", "videorate",
-    # 视频输出
-    "glimagesink", "autovideosink",
+    # 视频输出：glimagesink 在 macOS 上不可靠（解码正常但窗口不刷新），
+    # 必须把可替换的 sink 都带上，便于 -vs 切换定位。
+    "glimagesink", "caopengllayersink", "osxvideosink", "autovideosink",
+    "fpsdisplaysink",
     # audio：UxPlay 的音频解码器在 audio_renderer.c 里硬编码为 avdec_aac/avdec_alac
     "avdec_aac", "avdec_alac", "audioconvert", "audioresample", "volume", "level",
     "osxaudiosink", "autoaudiosink",
@@ -320,12 +322,16 @@ def main():
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         rewrite(p, "@loader_path")
 
-    # 可执行文件 / 插件 / scanner：@loader_path/../lib/<name>
+    # 可执行文件 / 插件 / scanner：指向 runtime/lib，但相对层级不同。
+    #   bin/uxplay                   -> ../lib
+    #   gstreamer-1.0/libgst*.dylib  -> ../lib
+    #   libexec/gstreamer-1.0/...    -> ../../lib   （多一层，写错就 "Library not loaded"）
     targets = [os.path.join(outdir, "bin", "uxplay")] + copied_plugins
-    if os.path.isfile(scanner_out):
-        targets.append(scanner_out)
     for t in targets:
         rewrite(t, "@loader_path/../lib")
+    if os.path.isfile(scanner_out):
+        targets.append(scanner_out)
+        rewrite(scanner_out, "@loader_path/../../lib")
 
     # 4) strip 调试符号。Homebrew 的 bottle 不做 strip，插件和 dylib 里全是符号表，
     #    体积能差近一半。strip 会破坏原有签名，所以必须排在下面的重签名之前。
@@ -354,7 +360,9 @@ export GST_PLUGIN_PATH_1_0="$PWD/gstreamer-1.0"
 export GST_PLUGIN_SYSTEM_PATH_1_0=""
 export GST_REGISTRY_1_0="$PWD/.gst-registry.bin"
 [ -x "$PWD/libexec/gstreamer-1.0/gst-plugin-scanner" ] && export GST_PLUGIN_SCANNER="$PWD/libexec/gstreamer-1.0/gst-plugin-scanner"
-exec "$PWD/bin/uxplay" -vsync no -vs glimagesink "$@"
+# 视频 sink 可用环境变量覆盖，便于在不改包的情况下逐个试：
+#   UXPLAY_VS=glimagesink | caopengllayersink | osxvideosink | autovideosink
+exec "$PWD/bin/uxplay" -vsync no -vs "\${UXPLAY_VS:-glimagesink}" "$@"
 """
     rp = os.path.join(outdir, "run.sh")
     with open(rp, "w") as f:
