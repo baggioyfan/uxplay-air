@@ -94,7 +94,24 @@ def main():
     flavor = sys.argv[3] if len(sys.argv) > 3 else "air"
 
     plugdir = run(["pkg-config", "--variable=pluginsdir", "gstreamer-1.0"]).strip()
-    scanner = os.path.join(os.path.dirname(plugdir), "libexec", "gst-plugin-scanner")
+
+    # gst-plugin-scanner 的位置在不同版本/打包方式下不一致（brew 放在 prefix/libexec，
+    # 官方 pkg 放在 libexec/gstreamer-1.0，也可能直接躺在 bin/）。逐个候选探测。
+    scanner = None
+    prefix = run(["brew", "--prefix", "gstreamer"]).strip() if shutil.which("brew") else ""
+    for cand in (
+        os.path.join(prefix, "libexec", "gst-plugin-scanner") if prefix else "",
+        os.path.join(prefix, "libexec", "gstreamer-1.0", "gst-plugin-scanner") if prefix else "",
+        os.path.join(os.path.dirname(os.path.dirname(plugdir)), "libexec", "gst-plugin-scanner"),
+        os.path.join(os.path.dirname(plugdir), "libexec", "gst-plugin-scanner"),
+        os.path.join(os.path.dirname(os.path.dirname(plugdir)), "bin", "gst-plugin-scanner"),
+    ):
+        if cand and os.path.isfile(cand):
+            scanner = cand
+            break
+    if not scanner:
+        scanner = "<not found>"
+        print("scanner: searching, candidates were:", prefix or "(no brew)")
 
     for sub in ("bin", "lib", "gstreamer-1.0", "libexec/gstreamer-1.0"):
         os.makedirs(os.path.join(outdir, sub), exist_ok=True)
