@@ -116,12 +116,23 @@ def main():
                     candidates.append(f"libgst{name}{ext}")
                     break
     copied_plugins = []
+    skipped = []
     for fn in candidates:
         src = os.path.join(plugdir, fn)
         dst = os.path.join(outdir, "gstreamer-1.0", fn)
-        shutil.copy2(src, dst)
+        # 有些条目是断链符号链接（如 libgstnice.dylib），isfile 为 False
+        if not os.path.isfile(src):
+            skipped.append(fn)
+            continue
+        try:
+            shutil.copy2(src, dst)
+        except OSError as exc:
+            skipped.append(f"{fn} ({exc.strerror})")
+            continue
         copied_plugins.append(dst)
     print(f"plugins copied: {len(copied_plugins)} (all={all_plugins})")
+    if skipped:
+        print(f"plugins skipped: {len(skipped)} -> " + ", ".join(skipped[:10]))
     if not all_plugins:
         missing = [n for n in PLUGINS
                    if not any(os.path.isfile(os.path.join(plugdir, f"libgst{n}{e}"))
@@ -150,23 +161,29 @@ def main():
     for src, base in closure.items():
         if base in basenames and basenames[base] != src:
             print(f"  [warn] basename clash {base}")
+        try:
+            shutil.copy2(src, os.path.join(libdir, base))
+        except OSError as exc:
+            print(f"  [warn] copy failed {base}: {exc.strerror}")
+            continue
         basenames[base] = src
-        shutil.copy2(src, os.path.join(libdir, base))
         os.chmod(os.path.join(libdir, base), 0o755)
 
     # 3) 重写依赖
     def rewrite(path, lib_prefix):
         for d in deps_of(path):
             base = os.path.basename(d)
-            target = os.path.join(libdir, base)
-            if not os.path.isfile(target):
+            if not os.path.isfile(os.path.join(libdir, base)):
                 continue
-            run(["install_name_tool", "-change", d, f"{lib_prefix}/{base}", path])
+            subprocess.run(["install_name_tool", "-change", d,
+                            f"{lib_prefix}/{base}", path],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # lib 内部：@loader_path/<name>
     for base in basenames:
         p = os.path.join(libdir, base)
-        run(["install_name_tool", "-id", f"@loader_path/{base}", p])
+        subprocess.run(["install_name_tool", "-id", f"@loader_path/{base}", p],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         rewrite(p, "@loader_path")
 
     # 可执行文件 / 插件 / scanner：@loader_path/../lib/<name>
