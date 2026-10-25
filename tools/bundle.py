@@ -17,21 +17,22 @@ import shutil
 import subprocess
 import sys
 
-PLUGINS = [
+# 不再手写插件名单，而是列出「UxPlay 实际会创建的 GStreamer 元素」，
+# 由 gst-inspect-1.0 反查每个元素属于哪个插件。手写名单必然漏（元素散落在
+# 十几个插件里，例如 level 在 audiofx、videoflip 在 videofilter），漏一个就是
+# 运行时 gst_parse_launch 直接失败。
+REQUIRED_ELEMENTS = [
     # core / app
-    "coreelements", "coretracers", "app", "typefindfunctions", "autodetect",
-    # video
-    "videoconvertscale", "videorate", "videoparsersbad", "deinterlace",
-    "applemedia", "libav", "osxvideosink", "opengl", "glimagesink",
-    # audio
-    "audioconvert", "audioresample", "audiorate", "volume", "osxaudio",
-    "audioparsers", "audiomixer", "audiotestsrc", "coreaudio",
-    # demux / containers
-    "isomp4", "matroska", "wavparse", "id3demux", "aacparse",
-    # rtp / net (AirPlay 音频走 RTP)
-    "rtp", "rtpmanager", "udp", "rtsp", "soup",
-    # playback
-    "playback", "videotestsrc", "pbtypes",
+    "appsrc", "appsink", "queue", "capsfilter", "fakesink", "typefind",
+    # video 解码与转换（-vdec 默认 decodebin，macOS 自动选 vtdec_h264 硬解）
+    "decodebin", "h264parse", "h265parse", "jpegdec",
+    "vtdec_h264", "vtdec_h265", "avdec_h264",
+    "videoflip", "videoconvert", "videoscale", "videorate",
+    # 视频输出
+    "glimagesink", "autovideosink",
+    # audio：UxPlay 的音频解码器在 audio_renderer.c 里硬编码为 avdec_aac/avdec_alac
+    "avdec_aac", "avdec_alac", "audioconvert", "audioresample", "volume", "level",
+    "osxaudiosink", "autoaudiosink",
 ]
 
 SYSTEM_PREFIXES = ("/usr/lib/", "/System/", "/Library/Frameworks/")
@@ -46,6 +47,47 @@ def is_system_dep(dep):
     if dep.startswith(("@rpath/", "@executable_path/", "@loader_path/")):
         return True
     return False
+
+
+def resolve_plugins(elements):
+    """元素名 -> 所属插件文件名。用 gst-inspect-1.0 输出里的 Filename 反查。"""
+    files, unresolved = set(), []
+    for el in elements:
+        try:
+            out = run(["gst-inspect-1.0", el])
+        except subprocess.CalledProcessError:
+            unresolved.append(el)
+            continue
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith("Filename"):
+                files.add(os.path.basename(s.split(None, 1)[1].strip()))
+                break
+        else:
+            unresolved.append(el)
+    return files, unresolved
+
+
+def verify_bundle(outdir, elements, must):
+    """把系统插件路径清空，只用包里的插件，确认元素能解析（= 插件真的能加载）。"""
+    env = dict(os.environ)
+    env["GST_PLUGIN_PATH_1_0"] = os.path.join(outdir, "gstreamer-1.0")
+    env["GST_PLUGIN_SYSTEM_PATH_1_0"] = ""
+    env["GST_REGISTRY_1_0"] = os.path.join(outdir, ".verify-registry.bin")
+    env["DYLD_LIBRARY_PATH"] = os.path.join(outdir, "lib")
+    bad = []
+    for el in elements:
+        if el not in must:
+            continue
+        r = subprocess.run(["gst-inspect-1.0", el], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if r.returncode != 0:
+            bad.append(el)
+    try:
+        os.remove(env["GST_REGISTRY_1_0"])
+    except OSError:
+        pass
+    return bad
 
 
 def run(cmd, **kw):
@@ -119,19 +161,21 @@ def main():
     shutil.copy2(build_bin, os.path.join(outdir, "bin", "uxplay"))
     os.chmod(os.path.join(outdir, "bin", "uxplay"), 0o755)
 
-    # 1) 拷贝插件。默认全量：UxPlay 的 pipeline 元素散落在很多插件里，
-    #    白名单实测会漏（例如 audiofx 提供 level 元素，缺了直接 gst_parse_launch 失败）。
-    all_plugins = os.environ.get("BUNDLE_ALL_PLUGINS", "1") != "0"
+    # 1) 拷贝插件。默认「按元素反查」：UxPlay 实际用到的元素散落在十几个插件里，
+    #    全量会带进整个 FFmpeg 家族（170MB+），手写名单又必然漏（漏 level 就崩）。
+    #    BUNDLE_ALL_PLUGINS=1 可退回全量模式做对照。
+    all_plugins = os.environ.get("BUNDLE_ALL_PLUGINS", "0") != "0"
+    unresolved = []
     if all_plugins:
         candidates = sorted(f for f in os.listdir(plugdir)
                             if f.startswith("libgst") and f.endswith((".dylib", ".so")))
     else:
-        candidates = []
-        for name in PLUGINS:
-            for ext in (".dylib", ".so"):
-                if os.path.isfile(os.path.join(plugdir, f"libgst{name}{ext}")):
-                    candidates.append(f"libgst{name}{ext}")
-                    break
+        plugin_files, unresolved = resolve_plugins(REQUIRED_ELEMENTS)
+        candidates = sorted(plugin_files)
+        print(f"elements resolved: {len(REQUIRED_ELEMENTS) - len(unresolved)}/{len(REQUIRED_ELEMENTS)}"
+              f" -> {len(candidates)} plugins")
+        if unresolved:
+            print("elements NOT available on this platform: " + ", ".join(unresolved))
     copied_plugins = []
     skipped = []
     for fn in candidates:
@@ -150,11 +194,6 @@ def main():
     print(f"plugins copied: {len(copied_plugins)} (all={all_plugins})")
     if skipped:
         print(f"plugins skipped: {len(skipped)} -> " + ", ".join(skipped[:10]))
-    if not all_plugins:
-        missing = [n for n in PLUGINS
-                   if not any(os.path.isfile(os.path.join(plugdir, f"libgst{n}{e}"))
-                              for e in (".dylib", ".so"))]
-        print("missing plugins: " + (", ".join(missing) if missing else "(none)"))
 
     # GStreamer 期望 <prefix>/libexec/gstreamer-1.0/gst-plugin-scanner
     scanner_sub = os.path.join(outdir, "libexec", "gstreamer-1.0")
@@ -210,7 +249,17 @@ def main():
     for t in targets:
         rewrite(t, "@loader_path/../lib")
 
-    # 4) ad-hoc 重签名（install_name_tool 会破坏原签名）
+    # 4) strip 调试符号。Homebrew 的 bottle 不做 strip，插件和 dylib 里全是符号表，
+    #    体积能差近一半。strip 会破坏原有签名，所以必须排在下面的重签名之前。
+    if os.environ.get("BUNDLE_STRIP", "1") != "0":
+        stripped = 0
+        for p in [os.path.join(libdir, b) for b in basenames] + targets:
+            if subprocess.run(["strip", "-x", p], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0:
+                stripped += 1
+        print(f"stripped: {stripped} files")
+
+    # 5) ad-hoc 重签名（install_name_tool / strip 都会破坏原签名）
     for base in basenames:
         subprocess.run(["codesign", "--force", "--sign", "-",
                         os.path.join(libdir, base)],
@@ -219,7 +268,7 @@ def main():
         subprocess.run(["codesign", "--force", "--sign", "-", t],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 5) 启动脚本
+    # 6) 启动脚本
     runsh = f"""#!/bin/bash
 cd "$(dirname "$0")" || exit 1
 export DYLD_LIBRARY_PATH="$PWD/lib"
@@ -227,12 +276,24 @@ export GST_PLUGIN_PATH_1_0="$PWD/gstreamer-1.0"
 export GST_PLUGIN_SYSTEM_PATH_1_0=""
 export GST_REGISTRY_1_0="$PWD/.gst-registry.bin"
 [ -x "$PWD/libexec/gstreamer-1.0/gst-plugin-scanner" ] && export GST_PLUGIN_SCANNER="$PWD/libexec/gstreamer-1.0/gst-plugin-scanner"
-exec "$PWD/bin/uxplay" -vsync no "$@"
+exec "$PWD/bin/uxplay" -vsync no -vs glimagesink "$@"
 """
     rp = os.path.join(outdir, "run.sh")
     with open(rp, "w") as f:
         f.write(runsh)
     os.chmod(rp, 0o755)
+
+    # 7) 自检：清空系统插件路径，只用包里的插件，逐个确认元素可解析。
+    #    这一步是给「裁剪插件」兜底的——漏一个元素，运行时就是 gst_parse_launch 失败。
+    must = set(REQUIRED_ELEMENTS) - set(unresolved)
+    bad = verify_bundle(outdir, REQUIRED_ELEMENTS, must)
+    total = sum(os.path.getsize(os.path.join(dp, f))
+                for dp, _, fs in os.walk(outdir) for f in fs)
+    print(f"bundle size: {total / 1048576:.1f} MB")
+    if bad:
+        print("!! VERIFY FAILED, elements not resolvable from bundle: " + ", ".join(bad))
+        sys.exit(1)
+    print(f"verify: {len(must)} elements all resolve from the bundle")
     print(f"OK -> {outdir}")
 
 
