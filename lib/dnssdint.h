@@ -29,14 +29,9 @@
 #define RAOP_CN "0,1,2,3"       /* Audio codec: PCM, ALAC, AAC, AAC ELD */
 #define RAOP_ET "0,3,5"         /* Encryption type: None, FairPlay, FairPlay SAPv2.5 */
 #define RAOP_VV "2"
-/* AirMirror (BoostVision, AppleTV3,2) 实测可被 macOS 识别为「可扩展屏」，此处复刻其 features。
- * 原 UxPlay 默认值（第一代 AppleTV3,2 镜像用）：
- *   FEATURES_1 "0x5A7FFEE6"  FEATURES_2 "0x0"
- * 复刻安卓 AirMirror 实测值：
- *   features = 0x4a7fdfd5, 0x400
- * 还原方法：把下面两行换回上面的值即可。 */
-#define FEATURES_1 "0x4a7fdfd5" /* macOS 可见 AirMirror 实测值：低位 32bit */
-#define FEATURES_2 "0x400"      /* macOS 可见 AirMirror 实测值：高位 32bit（bit 42） */
+#define FEATURES_1 "0x5A7FFEE6" /* first 32 bits of features, with bit 27 ("supports legacy pairing") ON */
+//#define FEATURES_1 "0x527FFEE6" /* first 32 bits of features, with bit 27 ("supports legacy pairing") OFF */
+#define FEATURES_2  "0x0"        /* second 32 bits of features */
 #define RAOP_RHD "5.6.0.0"
 #define RAOP_SF "0x4"
 #define RAOP_SV "false"
@@ -49,7 +44,7 @@
 #define RAOP_VN "65537"
 
 #define AIRPLAY_SRCVERS GLOBAL_VERSION /*defined in global.h */
-#define AIRPLAY_FLAGS "0x44"   /* AirMirror 实测 0x44（UxPlay 原值 0x84，差 bit7） */
+#define AIRPLAY_FLAGS "0x84"
 #define AIRPLAY_VV "2"
 #define AIRPLAY_PI "2e388006-13ba-4041-9a67-25dd4a43d536"
 
