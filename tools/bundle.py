@@ -33,7 +33,7 @@ REQUIRED_ELEMENTS = [
     # 视频输出：glimagesink 在 macOS 上不可靠（解码正常但窗口不刷新），
     # 必须把可替换的 sink 都带上，便于 -vs 切换定位。
     "glimagesink", "caopengllayersink", "osxvideosink", "autovideosink",
-    "fpsdisplaysink",
+    "fpsdisplaysink", "videotestsrc", "videoconvert",
     # audio：UxPlay 的音频解码器在 audio_renderer.c 里硬编码为 avdec_aac/avdec_alac
     "avdec_aac", "avdec_alac", "audioconvert", "audioresample", "volume", "level",
     "osxaudiosink", "autoaudiosink",
@@ -241,6 +241,18 @@ def main():
     shutil.copy2(build_bin, os.path.join(outdir, "bin", "uxplay"))
     os.chmod(os.path.join(outdir, "bin", "uxplay"), 0o755)
 
+    # 附带 gst-launch-1.0：用来在本机用 videotestsrc 单独验证视频 sink 能不能渲染，
+    # 不必每次都让发送端连上来（DEBUG_TOOLS=0 可去掉）。
+    if os.environ.get("DEBUG_TOOLS", "1") != "0":
+        gstlaunch = shutil.which("gst-launch-1.0") or ""
+        if gstlaunch and os.path.isfile(gstlaunch):
+            dst = os.path.join(outdir, "bin", "gst-launch-1.0")
+            shutil.copy2(gstlaunch, dst)
+            os.chmod(dst, 0o755)
+            print(f"debug tool: gst-launch-1.0 -> {dst}")
+        else:
+            print("debug tool: gst-launch-1.0 not found")
+
     # 1) 拷贝插件。默认「按元素反查」：UxPlay 实际用到的元素散落在十几个插件里，
     #    全量会带进整个 FFmpeg 家族（170MB+），手写名单又必然漏（漏 level 就崩）。
     #    BUNDLE_ALL_PLUGINS=1 可退回全量模式做对照。
@@ -287,6 +299,9 @@ def main():
 
     # 2) 递归收集 dylib 闭包
     roots = [os.path.join(outdir, "bin", "uxplay")] + copied_plugins
+    gstlaunch_out = os.path.join(outdir, "bin", "gst-launch-1.0")
+    if os.path.isfile(gstlaunch_out):
+        roots.append(gstlaunch_out)
     if os.path.isfile(scanner_out):
         roots.append(scanner_out)
     closure = collect(roots)
@@ -327,6 +342,8 @@ def main():
     #   gstreamer-1.0/libgst*.dylib  -> ../lib
     #   libexec/gstreamer-1.0/...    -> ../../lib   （多一层，写错就 "Library not loaded"）
     targets = [os.path.join(outdir, "bin", "uxplay")] + copied_plugins
+    if os.path.isfile(gstlaunch_out):
+        targets.append(gstlaunch_out)
     for t in targets:
         rewrite(t, "@loader_path/../lib")
     if os.path.isfile(scanner_out):
