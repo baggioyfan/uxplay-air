@@ -69,8 +69,11 @@ def deps_of(path):
 
 
 def collect(roots):
+    """递归收集 roots 的非系统依赖（roots 自身不进闭包）。"""
     seen = {}          # 绝对路径 -> basename
-    queue = list(roots)
+    queue = []
+    for r in roots:
+        queue.extend(deps_of(r))
     while queue:
         cur = queue.pop()
         if cur in seen:
@@ -99,15 +102,29 @@ def main():
     shutil.copy2(build_bin, os.path.join(outdir, "bin", "uxplay"))
     os.chmod(os.path.join(outdir, "bin", "uxplay"), 0o755)
 
-    # 1) 拷贝白名单插件
+    # 1) 拷贝白名单插件（macOS 构建产物是 .dylib，不是 .so）
     copied_plugins = []
     for name in PLUGINS:
-        src = os.path.join(plugdir, f"libgst{name}.so")
-        if os.path.isfile(src):
-            dst = os.path.join(outdir, "gstreamer-1.0", os.path.basename(src))
-            shutil.copy2(src, dst)
-            copied_plugins.append(dst)
+        for ext in (".dylib", ".so"):
+            src = os.path.join(plugdir, f"libgst{name}{ext}")
+            if os.path.isfile(src):
+                dst = os.path.join(outdir, "gstreamer-1.0", os.path.basename(src))
+                shutil.copy2(src, dst)
+                copied_plugins.append(dst)
+                break
     print(f"plugins copied: {len(copied_plugins)} / {len(PLUGINS)}")
+    missing = [n for n in PLUGINS
+               if not any(os.path.isfile(os.path.join(plugdir, f"libgst{n}{e}"))
+                          for e in (".dylib", ".so"))]
+    print("missing plugins: " + (", ".join(missing) if missing else "(none)")
+          + "  <- 名称不存在，按需增删")
+    if not copied_plugins:
+        print("!! pluginsdir content sample:")
+        try:
+            for fn in sorted(os.listdir(plugdir))[:30]:
+                print("   " + fn)
+        except OSError as exc:
+            print(f"   cannot list {plugdir}: {exc}")
 
     if os.path.isfile(scanner):
         shutil.copy2(scanner, os.path.join(outdir, "libexec", "gst-plugin-scanner"))
