@@ -26,7 +26,9 @@ REQUIRED_ELEMENTS = [
     "appsrc", "appsink", "queue", "capsfilter", "fakesink", "typefind",
     # video 解码与转换（-vdec 默认 decodebin，macOS 自动选 vtdec_h264 硬解）
     "decodebin", "h264parse", "h265parse", "jpegdec",
-    "vtdec_h264", "vtdec_h265", "avdec_h264",
+    # GStreamer 1.24+ 把 vtdec_h264/vtdec_h265 合并成单个 vtdec；两个名字都列上，
+    # 不存在的那个会被自动记为 unresolved。漏了 applemedia 就会掉回软解，i5 上必卡。
+    "vtdec", "vtdec_h264", "vtdec_h265", "avdec_h264",
     "videoflip", "videoconvert", "videoscale", "videorate",
     # 视频输出
     "glimagesink", "autovideosink",
@@ -88,6 +90,82 @@ def verify_bundle(outdir, elements, must):
     except OSError:
         pass
     return bad
+
+
+INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>UxPlay</string>
+    <key>CFBundleDisplayName</key><string>UxPlay</string>
+    <key>CFBundleIdentifier</key><string>com.baggioyfan.uxplay-air</string>
+    <key>CFBundleVersion</key><string>1.74</string>
+    <key>CFBundleShortVersionString</key><string>1.74</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleExecutable</key><string>UxPlay</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>LSMinimumSystemVersion</key><string>11.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>UxPlay 需要访问本地网络，才能被 AirPlay 发送端发现并接收画面。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_airplay._tcp</string>
+        <string>_raop._tcp</string>
+    </array>
+</dict>
+</plist>
+"""
+
+# Finder 里双击时没有终端，stdout 必须落盘，否则出问题只能靠猜。
+APP_WRAPPER = """#!/bin/bash
+here="$(cd "$(dirname "$0")" && pwd)"
+run="$here/../Resources/runtime/run.sh"
+log="$HOME/Library/Logs/UxPlay.log"
+mkdir -p "$(dirname "$log")"
+if [ -t 1 ]; then
+    exec "$run" "$@"
+else
+    echo "=== $(date) launch ===" >> "$log"
+    exec "$run" "$@" >> "$log" 2>&1
+fi
+"""
+
+
+def make_app(outdir, appname="UxPlay"):
+    """把可移植目录包成标准 .app。
+
+    布局：UxPlay.app/Contents/{MacOS/UxPlay(包装脚本), Resources/runtime/...}
+    保留 bin/ 与 lib/ 的相对关系，这样已重写好的 @loader_path 依赖不用再动。
+    """
+    root = os.path.dirname(outdir)
+    app = os.path.join(root, f"{appname}.app")
+    if os.path.isdir(app):
+        shutil.rmtree(app)
+    contents = os.path.join(app, "Contents")
+    macos = os.path.join(contents, "MacOS")
+    resources = os.path.join(contents, "Resources")
+    os.makedirs(macos, exist_ok=True)
+    os.makedirs(resources, exist_ok=True)
+
+    shutil.move(outdir, os.path.join(resources, "runtime"))
+
+    with open(os.path.join(contents, "Info.plist"), "w") as f:
+        f.write(INFO_PLIST)
+    wrapper = os.path.join(macos, appname)
+    with open(wrapper, "w") as f:
+        f.write(APP_WRAPPER)
+    os.chmod(wrapper, 0o755)
+
+    # ad-hoc 签名整个 bundle（内部组件已逐个签过）
+    r = subprocess.run(["codesign", "--force", "--sign", "-", app],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if r.returncode != 0:
+        print("codesign warning:", r.stderr.strip()[:200])
+    v = subprocess.run(["codesign", "-v", app], capture_output=True, text=True)
+    print(f"app: {app} ({'signed ok' if v.returncode == 0 else 'sign check failed'})")
+    return app
 
 
 def run(cmd, **kw):
@@ -295,6 +373,9 @@ exec "$PWD/bin/uxplay" -vsync no -vs glimagesink "$@"
         sys.exit(1)
     print(f"verify: {len(must)} elements all resolve from the bundle")
     print(f"OK -> {outdir}")
+
+    if os.environ.get("BUNDLE_APP", "1") != "0":
+        make_app(outdir, os.environ.get("BUNDLE_APP_NAME", "UxPlay"))
 
 
 if __name__ == "__main__":

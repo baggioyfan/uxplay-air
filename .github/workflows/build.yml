@@ -71,22 +71,31 @@ jobs:
           file build/uxplay
           otool -arch x86_64 -L build/uxplay | head -25
 
-      - name: Bundle portable runtime
+      - name: Bundle portable runtime into UxPlay.app
         run: |
-          python3 tools/bundle.py build/uxplay "dist/uxplay-${{ matrix.flavor }}" "${{ matrix.flavor }}"
-          du -sh "dist/uxplay-${{ matrix.flavor }}"
+          python3 tools/bundle.py build/uxplay "dist/${{ matrix.flavor }}" "${{ matrix.flavor }}"
+          du -sh dist/UxPlay.app
+          echo "--- app tree ---"
+          find dist/UxPlay.app -maxdepth 3 -type d | sort
           echo "--- linked libs after rewrite ---"
-          otool -arch x86_64 -L "dist/uxplay-${{ matrix.flavor }}/bin/uxplay"
+          otool -arch x86_64 -L dist/UxPlay.app/Contents/Resources/runtime/bin/uxplay | head -25
 
-      - name: Package
+      - name: Package (dmg + tar.gz)
         run: |
           cd dist
-          tar -czf "uxplay-${{ matrix.flavor }}.tar.gz" "uxplay-${{ matrix.flavor }}"
-          ls -lh "uxplay-${{ matrix.flavor }}.tar.gz"
+          mkdir -p stage
+          cp -R UxPlay.app stage/
+          ln -sf /Applications stage/Applications
+          hdiutil create -quiet -volname "UxPlay" -srcfolder stage \
+            -ov -format UDZO "UxPlay-${{ matrix.flavor }}.dmg"
+          tar -czf "UxPlay-${{ matrix.flavor }}.tar.gz" UxPlay.app
+          ls -lh UxPlay-${{ matrix.flavor }}.dmg UxPlay-${{ matrix.flavor }}.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:
           name: uxplay-${{ matrix.flavor }}
-          path: dist/uxplay-${{ matrix.flavor }}.tar.gz
+          path: |
+            dist/UxPlay-${{ matrix.flavor }}.dmg
+            dist/UxPlay-${{ matrix.flavor }}.tar.gz
           compression-level: 0
           retention-days: 3
