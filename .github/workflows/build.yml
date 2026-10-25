@@ -1,0 +1,92 @@
+name: build-uxplay-air
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+env:
+  HOMEBREW_NO_ANALYTICS: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_AUTO_UPDATE: 1
+
+jobs:
+  build:
+    # macos-15-intel = 免费 Intel(x86_64) runner。macos-13 已下线，macos-15/latest 是 arm64。
+    runs-on: macos-15-intel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 原始 UxPlay 身份，用于验证链路是否通
+          - flavor: stock
+            rewrite: 's/0x4a7fdfd5/0x5A7FFEE6/; s/"0x400"/"0x0"/; s/AIRPLAY_FLAGS "0x44"/AIRPLAY_FLAGS "0x84"/'
+          # 完全复刻安卓 AirMirror：features 0x4a7fdfd5,0x400 + flags 0x44
+          - flavor: air
+            rewrite: ''
+          # 折中：features 照抄 AirMirror，flags 保持 UxPlay 的 0x84
+          - flavor: air84
+            rewrite: 's/AIRPLAY_FLAGS "0x44"/AIRPLAY_FLAGS "0x84"/'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner info
+        run: |
+          sw_vers
+          uname -m
+          echo "brew prefix: $(brew --prefix)"
+          xcodebuild -version
+
+      - name: Apply receiver identity (${{ matrix.flavor }})
+        run: |
+          if [ -n "${{ matrix.rewrite }}" ]; then
+            perl -pi -e '${{ matrix.rewrite }}' lib/dnssdint.h
+          fi
+          grep -nE 'GLOBAL_MODEL|GLOBAL_VERSION' lib/global.h
+          grep -nE 'FEATURES_1|FEATURES_2|AIRPLAY_FLAGS' lib/dnssdint.h
+
+      - name: Install dependencies
+        run: |
+          brew untap aws/tap || true
+          brew install cmake pkg-config openssl@3 libplist glib gstreamer orc
+          echo "--- gst plugins dir ---"
+          pkg-config --variable=pluginsdir gstreamer-1.0
+          du -sh "$(pkg-config --variable=pluginsdir gstreamer-1.0)" || true
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNO_X11_DEPS=ON \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+
+      - name: Build
+        run: cmake --build build --parallel "$(sysctl -n hw.ncpu)"
+
+      - name: Verify binary
+        run: |
+          file build/uxplay
+          otool -arch x86_64 -L build/uxplay | head -25
+
+      - name: Bundle portable runtime
+        run: |
+          python3 tools/bundle.py build/uxplay "dist/uxplay-${{ matrix.flavor }}" "${{ matrix.flavor }}"
+          du -sh "dist/uxplay-${{ matrix.flavor }}"
+          echo "--- linked libs after rewrite ---"
+          otool -arch x86_64 -L "dist/uxplay-${{ matrix.flavor }}/bin/uxplay"
+
+      - name: Package
+        run: |
+          cd dist
+          tar -czf "uxplay-${{ matrix.flavor }}.tar.gz" "uxplay-${{ matrix.flavor }}"
+          ls -lh "uxplay-${{ matrix.flavor }}.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uxplay-${{ matrix.flavor }}
+          path: dist/uxplay-${{ matrix.flavor }}.tar.gz
+          compression-level: 0
+          retention-days: 30
