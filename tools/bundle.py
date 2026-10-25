@@ -6,7 +6,7 @@
     bin/uxplay
     lib/*.dylib
     gstreamer-1.0/*.so
-    libexec/gst-plugin-scanner   (若存在)
+    libexec/gstreamer-1.0/gst-plugin-scanner
     run.sh
 
 所有非系统 dylib 被复制到 lib/ 并把依赖重写为 @loader_path/../lib/<name>，
@@ -96,43 +96,50 @@ def main():
     plugdir = run(["pkg-config", "--variable=pluginsdir", "gstreamer-1.0"]).strip()
     scanner = os.path.join(os.path.dirname(plugdir), "libexec", "gst-plugin-scanner")
 
-    for sub in ("bin", "lib", "gstreamer-1.0", "libexec"):
+    for sub in ("bin", "lib", "gstreamer-1.0", "libexec/gstreamer-1.0"):
         os.makedirs(os.path.join(outdir, sub), exist_ok=True)
 
     shutil.copy2(build_bin, os.path.join(outdir, "bin", "uxplay"))
     os.chmod(os.path.join(outdir, "bin", "uxplay"), 0o755)
 
-    # 1) 拷贝白名单插件（macOS 构建产物是 .dylib，不是 .so）
+    # 1) 拷贝插件。默认全量：UxPlay 的 pipeline 元素散落在很多插件里，
+    #    白名单实测会漏（例如 audiofx 提供 level 元素，缺了直接 gst_parse_launch 失败）。
+    all_plugins = os.environ.get("BUNDLE_ALL_PLUGINS", "1") != "0"
+    if all_plugins:
+        candidates = sorted(f for f in os.listdir(plugdir)
+                            if f.startswith("libgst") and f.endswith((".dylib", ".so")))
+    else:
+        candidates = []
+        for name in PLUGINS:
+            for ext in (".dylib", ".so"):
+                if os.path.isfile(os.path.join(plugdir, f"libgst{name}{ext}")):
+                    candidates.append(f"libgst{name}{ext}")
+                    break
     copied_plugins = []
-    for name in PLUGINS:
-        for ext in (".dylib", ".so"):
-            src = os.path.join(plugdir, f"libgst{name}{ext}")
-            if os.path.isfile(src):
-                dst = os.path.join(outdir, "gstreamer-1.0", os.path.basename(src))
-                shutil.copy2(src, dst)
-                copied_plugins.append(dst)
-                break
-    print(f"plugins copied: {len(copied_plugins)} / {len(PLUGINS)}")
-    missing = [n for n in PLUGINS
-               if not any(os.path.isfile(os.path.join(plugdir, f"libgst{n}{e}"))
-                          for e in (".dylib", ".so"))]
-    print("missing plugins: " + (", ".join(missing) if missing else "(none)")
-          + "  <- 名称不存在，按需增删")
-    if not copied_plugins:
-        print("!! pluginsdir content sample:")
-        try:
-            for fn in sorted(os.listdir(plugdir))[:30]:
-                print("   " + fn)
-        except OSError as exc:
-            print(f"   cannot list {plugdir}: {exc}")
+    for fn in candidates:
+        src = os.path.join(plugdir, fn)
+        dst = os.path.join(outdir, "gstreamer-1.0", fn)
+        shutil.copy2(src, dst)
+        copied_plugins.append(dst)
+    print(f"plugins copied: {len(copied_plugins)} (all={all_plugins})")
+    if not all_plugins:
+        missing = [n for n in PLUGINS
+                   if not any(os.path.isfile(os.path.join(plugdir, f"libgst{n}{e}"))
+                              for e in (".dylib", ".so"))]
+        print("missing plugins: " + (", ".join(missing) if missing else "(none)"))
 
+    # GStreamer 期望 <prefix>/libexec/gstreamer-1.0/gst-plugin-scanner
+    scanner_sub = os.path.join(outdir, "libexec", "gstreamer-1.0")
+    scanner_out = os.path.join(scanner_sub, "gst-plugin-scanner")
     if os.path.isfile(scanner):
-        shutil.copy2(scanner, os.path.join(outdir, "libexec", "gst-plugin-scanner"))
-        os.chmod(os.path.join(outdir, "libexec", "gst-plugin-scanner"), 0o755)
+        shutil.copy2(scanner, scanner_out)
+        os.chmod(scanner_out, 0o755)
+        print("scanner: bundled")
+    else:
+        print(f"scanner: NOT found at {scanner}")
 
     # 2) 递归收集 dylib 闭包
     roots = [os.path.join(outdir, "bin", "uxplay")] + copied_plugins
-    scanner_out = os.path.join(outdir, "libexec", "gst-plugin-scanner")
     if os.path.isfile(scanner_out):
         roots.append(scanner_out)
     closure = collect(roots)
@@ -185,7 +192,7 @@ export DYLD_LIBRARY_PATH="$PWD/lib"
 export GST_PLUGIN_PATH_1_0="$PWD/gstreamer-1.0"
 export GST_PLUGIN_SYSTEM_PATH_1_0=""
 export GST_REGISTRY_1_0="$PWD/.gst-registry.bin"
-[ -x "$PWD/libexec/gst-plugin-scanner" ] && export GST_PLUGIN_SCANNER="$PWD/libexec/gst-plugin-scanner"
+[ -x "$PWD/libexec/gstreamer-1.0/gst-plugin-scanner" ] && export GST_PLUGIN_SCANNER="$PWD/libexec/gstreamer-1.0/gst-plugin-scanner"
 exec "$PWD/bin/uxplay" -vsync no "$@"
 """
     rp = os.path.join(outdir, "run.sh")
