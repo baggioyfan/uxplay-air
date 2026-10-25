@@ -222,7 +222,10 @@ raop_handler_info(raop_conn_t *conn,
     plist_t displays_0_width_pixels_node = plist_new_uint(raop->width);
     plist_t displays_0_height_pixels_node = plist_new_uint(raop->height);
     plist_t displays_0_rotation_node = plist_new_bool(0); /* set to true in AppleTV gen 3 (which has features bit 8  set */
-    plist_t displays_0_refresh_rate_node = plist_new_real((double) 1.0 / raop->refreshRate);  /* set as real 0.166666  = 60hz in AppleTV gen 3 */
+    /* [fix] 实测正常接收端(FOLD3/AirMirror)的 /info 发 refreshRate=60(Hz 整数)；
+     * UxPlay 原来发 1.0/60=0.0167(把周期当频率)，macOS 27 sender 据此创建的虚拟显示器
+     * 步调错乱 → pacing sink 100% 丢帧。改为与正常接收端一致。 */
+    plist_t displays_0_refresh_rate_node = plist_new_uint(raop->refreshRate);
     plist_t displays_0_max_fps_node = plist_new_uint(raop->maxFPS);
     plist_t displays_0_overscanned_node = plist_new_bool(raop->overscanned);
     plist_t displays_0_features = plist_new_uint(14);
