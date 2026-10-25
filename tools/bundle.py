@@ -34,8 +34,18 @@ PLUGINS = [
     "playback", "videotestsrc", "pbtypes",
 ]
 
-SYSTEM_PREFIXES = ("/usr/lib/", "/System/", "/Library/Frameworks/", "@rpath/",
-                   "@executable_path/", "@loader_path/", "")
+SYSTEM_PREFIXES = ("/usr/lib/", "/System/", "/Library/Frameworks/")
+
+
+def is_system_dep(dep):
+    """判断是否应跳过（系统库 / 已重写过的相对路径）。"""
+    if not dep:
+        return True
+    if dep.startswith(SYSTEM_PREFIXES):
+        return True
+    if dep.startswith(("@rpath/", "@executable_path/", "@loader_path/")):
+        return True
+    return False
 
 
 def run(cmd, **kw):
@@ -52,7 +62,7 @@ def deps_of(path):
         if not parts or not parts[0]:
             continue
         dep = parts[0]
-        if dep.startswith(SYSTEM_PREFIXES):
+        if is_system_dep(dep):
             continue
         result.append(dep)
     return result

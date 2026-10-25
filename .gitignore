@@ -2,3 +2,6 @@ build/
 dist/
 .vscode/
 .gst-registry.bin
+._*
+.DS_Store
+__pycache__/
