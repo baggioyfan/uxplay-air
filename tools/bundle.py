@@ -362,7 +362,7 @@ export GST_REGISTRY_1_0="$PWD/.gst-registry.bin"
 [ -x "$PWD/libexec/gstreamer-1.0/gst-plugin-scanner" ] && export GST_PLUGIN_SCANNER="$PWD/libexec/gstreamer-1.0/gst-plugin-scanner"
 # 视频 sink 可用环境变量覆盖，便于在不改包的情况下逐个试：
 #   UXPLAY_VS=glimagesink | caopengllayersink | osxvideosink | autovideosink
-exec "$PWD/bin/uxplay" -vsync no -vs "\${UXPLAY_VS:-glimagesink}" "$@"
+exec "$PWD/bin/uxplay" -vsync no -vs "${{UXPLAY_VS:-glimagesink}}" "$@"
 """
     rp = os.path.join(outdir, "run.sh")
     with open(rp, "w") as f:
